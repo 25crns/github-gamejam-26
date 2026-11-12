@@ -52,7 +52,8 @@ export function updatePlayer(
   door: DoorWall,
   physics: PhysicsParams = DEFAULT_PHYSICS,
   onDeath?: () => void,
-  onWin?: () => void
+  onWin?: () => void,
+  options?: { isObjectiveShiftLeft?: boolean }
 ): { playerDied: boolean; levelWon: boolean } {
   let playerDied = false;
   let levelWon = false;
@@ -65,7 +66,39 @@ export function updatePlayer(
     return { playerDied: false, levelWon: false };
   }
 
-  // --- Horizontal acceleration ---
+  // --- Auto-Walking Mode (Work Shift / Idle Timeout) ---
+  if (player.isAutoWalking) {
+    player.vx = 2.4;
+    player.facing = 'right';
+    player.x += player.vx;
+
+    // Auto-walk reaches right edge to win
+    if (player.x + player.width >= door.x + 8) {
+      levelWon = true;
+      sound.playLevelComplete();
+      if (onWin) onWin();
+      return { playerDied: false, levelWon: true };
+    }
+
+    // Still apply gravity and platform landing while strolling
+    player.vy += physics.gravity;
+    if (player.vy > physics.maxFallSpeed) player.vy = physics.maxFallSpeed;
+    player.y += player.vy;
+
+    for (const plat of platforms) {
+      if (plat.isBackgroundBridge && (plat.opacity ?? 0) < 0.6) continue;
+      if (checkAABB(player, plat)) {
+        if (player.vy > 0) {
+          player.y = plat.y - player.height;
+          player.vy = 0;
+          player.isGrounded = true;
+        }
+      }
+    }
+    return { playerDied: false, levelWon: false };
+  }
+
+  // --- Normal Horizontal acceleration ---
   if (inputs.left && !inputs.right) {
     player.vx -= physics.accel;
     if (player.vx < -physics.maxSpeed) player.vx = -physics.maxSpeed;
@@ -99,13 +132,27 @@ export function updatePlayer(
   const prevX = player.x;
   player.x += player.vx;
 
+  // Check Objective Shift (walk off left edge to win!)
+  if (options?.isObjectiveShiftLeft && player.x <= 5) {
+    levelWon = true;
+    sound.playLevelComplete();
+    if (onWin) onWin();
+    return { playerDied: false, levelWon: true };
+  }
+
+  // Normal Left boundary
+  if (player.x < 0) {
+    player.x = 0;
+    player.vx = 0;
+  }
+
   // Check right wall & door
   if (player.x + player.width >= door.x) {
     const isPlayerInDoorGap =
       player.y + player.height > door.y && player.y < door.y + door.height;
 
+    // Door is open only when isOpen is true AND close animation has completed
     if (door.isOpen && isPlayerInDoorGap) {
-      // Player is entering the open door gap on the right wall!
       if (player.x + player.width >= door.x + 8) {
         levelWon = true;
         sound.playLevelComplete();
@@ -113,7 +160,7 @@ export function updatePlayer(
         return { playerDied: false, levelWon: true };
       }
     } else {
-      // Blocked by solid right wall
+      // Blocked by solid right wall or closed sliding dashed gate
       player.x = door.x - player.width;
       player.vx = 0;
     }
@@ -121,6 +168,9 @@ export function updatePlayer(
 
   // Solid platform side collision
   for (const plat of platforms) {
+    // Skip ghost background bridge if not in focus
+    if (plat.isBackgroundBridge && (plat.opacity ?? 0) < 0.6) continue;
+
     if (checkAABB(player, plat)) {
       if (player.vx > 0) {
         player.x = plat.x - player.width;
@@ -139,6 +189,9 @@ export function updatePlayer(
   player.isGrounded = false;
 
   for (const plat of platforms) {
+    // Skip ghost background bridge if not in focus
+    if (plat.isBackgroundBridge && (plat.opacity ?? 0) < 0.6) continue;
+
     if (checkAABB(player, plat)) {
       // Falling down onto platform top
       if (player.vy > 0 && prevY + player.height <= plat.y + 12) {
@@ -155,12 +208,6 @@ export function updatePlayer(
         player.vy = 0;
       }
     }
-  }
-
-  // Left boundary
-  if (player.x < 0) {
-    player.x = 0;
-    player.vx = 0;
   }
 
   // Bottom Void Death

@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { LevelData, Platform, Spike, DoorWall, Player } from '../game/types';
 import { getLevelData, TOTAL_LEVELS } from '../game/levels';
-import { updatePlayer, InputState, checkAABB } from '../game/physics';
+import { updatePlayer, InputState } from '../game/physics';
 import { sound } from '../audio/soundEngine';
-import { Volume2, VolumeX, RotateCcw, CheckCircle2 } from 'lucide-react';
+import { Volume2, VolumeX, RotateCcw, CheckCircle2, ArrowRight, HelpCircle } from 'lucide-react';
 
 interface TerminalPlatformerProps {
   onBackToTitle?: () => void;
@@ -25,15 +25,26 @@ export const TerminalPlatformer: React.FC<TerminalPlatformerProps> = ({
   const [allLevelsCompleted, setAllLevelsCompleted] = useState<boolean>(false);
   const [deaths, setDeaths] = useState<number>(0);
   const [isMuted, setIsMuted] = useState<boolean>(false);
-  const [transitioning, setTransitioning] = useState<boolean>(false);
+  const [showHint, setShowHint] = useState<boolean>(false);
+  const [showLevelClearedModal, setShowLevelClearedModal] = useState<boolean>(false);
+  const [clearedLevelInfo, setClearedLevelInfo] = useState<{ num: number; explanation: string } | null>(null);
   const [startTime] = useState<number>(() => Date.now());
   const [finalTime, setFinalTime] = useState<number>(0);
 
   // Level 3 Caps Lock state
   const [isCapsActive, setIsCapsActive] = useState<boolean>(false);
 
-  // Level 9 URL bar state
+  // Level 9 Tilt-Shift focus state (0 = sharp foreground, 1 = sharp background bridge)
+  const [tiltFocus, setTiltFocus] = useState<number>(0);
+
+  // Level 12 URL bar state
   const [urlHashInput, setUrlHashInput] = useState<string>('?door=locked');
+
+  // Level 13 Orientation Shift state
+  const [isRotatedPerspective, setIsRotatedPerspective] = useState<boolean>(false);
+
+  // Work Shift (Level 8) Idle tracking
+  const lastActiveTimeRef = useRef<number>(Date.now());
 
   // Mutable Game References for High-Performance Canvas Loop (60 FPS)
   const playerRef = useRef<Player>({
@@ -47,6 +58,7 @@ export const TerminalPlatformer: React.FC<TerminalPlatformerProps> = ({
     facing: 'right',
     isDead: false,
     respawnTimer: 0,
+    isAutoWalking: false,
   });
 
   const platformsRef = useRef<Platform[]>([]);
@@ -56,6 +68,7 @@ export const TerminalPlatformer: React.FC<TerminalPlatformerProps> = ({
     y: 280,
     height: 90,
     isOpen: false,
+    closeAnimProgress: 0,
   });
 
   const inputsRef = useRef<InputState>({
@@ -68,24 +81,24 @@ export const TerminalPlatformer: React.FC<TerminalPlatformerProps> = ({
   // Level 2 typed sequence buffer
   const typeBufferRef = useRef<string>('');
 
-  // Level 7 dual shift tracking
+  // Level 10 dual shift tracking
   const leftShiftDownRef = useRef<boolean>(false);
   const rightShiftDownRef = useRef<boolean>(false);
 
-  // Level 6 clipboard selection marquee
-  const selectionStartRef = useRef<{ x: number; y: number } | null>(null);
-  const selectionEndRef = useRef<{ x: number; y: number } | null>(null);
-  const isSelectingMarqueeRef = useRef<boolean>(false);
+  // Level 7 clipboard storage
   const clipboardPlatformRef = useRef<Platform | null>(null);
-  const mouseCanvasPosRef = useRef<{ x: number; y: number }>({ x: 400, y: 220 });
+  const mouseCanvasPosRef = useRef<{ x: number; y: number }>({ x: 420, y: 310 });
 
-  // Mouse Dragging State for Level 5
+  // Mouse Dragging State
   const draggingItemRef = useRef<{
     type: 'platform' | 'spike';
     id: string;
     offsetX: number;
     offsetY: number;
   } | null>(null);
+
+  // BroadcastChannel for Level 14 Dual-Window Bridge
+  const broadcastChannelRef = useRef<BroadcastChannel | null>(null);
 
   // Particles for jumps, landing, and shift activation
   const particlesRef = useRef<Array<{
@@ -106,7 +119,7 @@ export const TerminalPlatformer: React.FC<TerminalPlatformerProps> = ({
       sound.playShiftTrigger();
       sound.playDoorOpen();
 
-      // Emit particles along the dotted door segment
+      // Emit particles along the door opening
       const doorX = doorRef.current.x;
       const doorY = doorRef.current.y;
       const doorH = doorRef.current.height;
@@ -132,13 +145,19 @@ export const TerminalPlatformer: React.FC<TerminalPlatformerProps> = ({
       setLevelData(data);
       setCurrentLevelNum(lvlNum);
       setIsWon(false);
-      setTransitioning(false);
+      setShowHint(false);
+      setShowLevelClearedModal(false);
+      setClearedLevelInfo(null);
       typeBufferRef.current = '';
       leftShiftDownRef.current = false;
       rightShiftDownRef.current = false;
-      selectionStartRef.current = null;
-      selectionEndRef.current = null;
-      isSelectingMarqueeRef.current = false;
+      setTiltFocus(0);
+      setIsRotatedPerspective(false);
+      lastActiveTimeRef.current = Date.now();
+
+      // Pre-seed clipboard with the source platform on Level 7 so Ctrl+V always works
+      const l7Source = data.platforms.find((p) => p.id === 'l7-source');
+      clipboardPlatformRef.current = l7Source ? { ...l7Source } : null;
 
       // Reset player
       playerRef.current = {
@@ -152,20 +171,27 @@ export const TerminalPlatformer: React.FC<TerminalPlatformerProps> = ({
         facing: 'right',
         isDead: false,
         respawnTimer: 0,
+        isAutoWalking: false,
       };
 
       // Deep clone platforms and spikes
       platformsRef.current = data.platforms.map((p) => ({ ...p, isShifted: false }));
       spikesRef.current = data.spikes.map((s) => ({ ...s, isShifted: false }));
-      doorRef.current = { ...data.door, isOpen: false };
+      
+      // Start door in sliding-down close animation
+      doorRef.current = {
+        ...data.door,
+        isOpen: false,
+        closeAnimProgress: 0,
+      };
 
-      // Level 4 (Control Shift): Door unlocks or opens as part of the challenge
+      // Level 4 (Control Shift): Door is open by default
       if (lvlNum === 4) {
         doorRef.current.isOpen = true;
       }
 
-      // Level 9 (URL Shift): initialize URL
-      if (lvlNum === 9) {
+      // Level 12 (URL Shift): initialize URL
+      if (lvlNum === 12) {
         setUrlHashInput('?door=locked');
         try {
           window.history.replaceState(null, '', '#door=locked');
@@ -186,32 +212,46 @@ export const TerminalPlatformer: React.FC<TerminalPlatformerProps> = ({
     sound.startAmbientDrone();
   }, [loadLevel, initialLevelId]);
 
-  // --- LEVEL 8: TAB SWITCH DETECTION ---
+  // Activity updater for Work Shift
+  const markActive = useCallback(() => {
+    lastActiveTimeRef.current = Date.now();
+    if (playerRef.current.isAutoWalking) {
+      playerRef.current.isAutoWalking = false;
+    }
+  }, []);
+
+  // --- LEVEL 11: TAB SWITCH DETECTION ---
   useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (currentLevelNum === 8) {
+    const triggerTabShift = () => {
+      if (currentLevelNum === 11) {
+        // Retract the floor-to-ceiling security bulkhead blocking the right platform
+        platformsRef.current = platformsRef.current.filter((p) => p.id !== 'tab-bulkhead');
         unlockDoor();
       }
     };
 
-    const handleWindowBlur = () => {
-      if (currentLevelNum === 8) {
-        unlockDoor();
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    window.addEventListener('blur', handleWindowBlur);
+    document.addEventListener('visibilitychange', triggerTabShift);
+    window.addEventListener('blur', triggerTabShift);
 
     return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('blur', handleWindowBlur);
+      document.removeEventListener('visibilitychange', triggerTabShift);
+      window.removeEventListener('blur', triggerTabShift);
     };
   }, [currentLevelNum, unlockDoor]);
 
-  // --- LEVEL 9: URL HASH / QUERY SHIFT DETECTION ---
+  // --- LEVEL 12: URL HASH / QUERY SHIFT DETECTION ---
+  const triggerUrlShiftUnlock = useCallback(() => {
+    // Lower the high url-bridge into position at y=275 so player can cross the chasm
+    for (const p of platformsRef.current) {
+      if (p.id === 'url-bridge') {
+        p.y = 275;
+      }
+    }
+    unlockDoor();
+  }, [unlockDoor]);
+
   useEffect(() => {
-    if (currentLevelNum !== 9) return;
+    if (currentLevelNum !== 12) return;
 
     const checkUrlShift = () => {
       const hash = window.location.hash.toLowerCase();
@@ -223,7 +263,7 @@ export const TerminalPlatformer: React.FC<TerminalPlatformerProps> = ({
         search.includes('unlocked') ||
         search.includes('shift=true')
       ) {
-        unlockDoor();
+        triggerUrlShiftUnlock();
         setUrlHashInput('?door=unlocked');
       }
     };
@@ -235,10 +275,117 @@ export const TerminalPlatformer: React.FC<TerminalPlatformerProps> = ({
       window.removeEventListener('hashchange', checkUrlShift);
       window.removeEventListener('popstate', checkUrlShift);
     };
-  }, [currentLevelNum, unlockDoor]);
+  }, [currentLevelNum, triggerUrlShiftUnlock]);
 
-  // Manual URL update handler (for iframes or direct input)
+  // --- LEVEL 13: PERSPECTIVE / ORIENTATION SHIFT DETECTION ---
+  const applyOrientationStaircase = useCallback(() => {
+    setIsRotatedPerspective(true);
+    // Rotate the 3 vertical wall panels (20x110) into horizontal climbable steps (110x20)!
+    for (const p of platformsRef.current) {
+      if (p.id === 'orient-step-1') {
+        p.x = 240;
+        p.y = 320;
+        p.width = 110;
+        p.height = 20;
+      } else if (p.id === 'orient-step-2') {
+        p.x = 380;
+        p.y = 250;
+        p.width = 110;
+        p.height = 20;
+      } else if (p.id === 'orient-step-3') {
+        p.x = 510;
+        p.y = 180;
+        p.width = 110;
+        p.height = 20;
+      }
+    }
+    unlockDoor();
+  }, [unlockDoor]);
+
+  useEffect(() => {
+    if (currentLevelNum !== 13) return;
+
+    const checkOrientation = () => {
+      const isPortrait =
+        window.innerHeight > window.innerWidth ||
+        (window.screen.orientation && window.screen.orientation.type.includes('portrait')) ||
+        (window.screen.orientation && window.screen.orientation.angle !== 0);
+
+      if (isPortrait) {
+        applyOrientationStaircase();
+      }
+    };
+
+    window.addEventListener('resize', checkOrientation);
+    if (window.screen.orientation) {
+      window.screen.orientation.addEventListener('change', checkOrientation);
+    }
+
+    return () => {
+      window.removeEventListener('resize', checkOrientation);
+      if (window.screen.orientation) {
+        window.screen.orientation.removeEventListener('change', checkOrientation);
+      }
+    };
+  }, [currentLevelNum, applyOrientationStaircase]);
+
+  // --- LEVEL 14: DUAL-WINDOW BROADCAST CHANNEL ---
+  const spawnTransferredPlatform = useCallback(() => {
+    if (!platformsRef.current.find((p) => p.id === 'received-platform')) {
+      platformsRef.current.push({
+        id: 'received-platform',
+        x: 455,
+        y: 330,
+        width: 125,
+        height: 20,
+        originalX: 455,
+        originalY: 330,
+        isShiftable: true,
+      });
+      // Reset first platform to left side of baffle so both halves of the chasm are bridged!
+      const firstPlat = platformsRef.current.find((p) => p.id === 'cross-window-platform');
+      if (firstPlat) {
+        firstPlat.x = 200;
+        firstPlat.y = 330;
+      }
+      unlockDoor();
+    }
+  }, [unlockDoor]);
+
+  useEffect(() => {
+    if (currentLevelNum !== 14) return;
+
+    try {
+      const bc = new BroadcastChannel('shift_multiverse_bridge');
+      broadcastChannelRef.current = bc;
+
+      bc.onmessage = (event) => {
+        if (event.data?.type === 'TRANSFER_PLATFORM') {
+          sound.playShiftTrigger();
+          spawnTransferredPlatform();
+        }
+      };
+
+      const handleStorage = (e: StorageEvent) => {
+        if (e.key === 'shift_multiverse_transfer' && e.newValue) {
+          sound.playShiftTrigger();
+          spawnTransferredPlatform();
+        }
+      };
+      window.addEventListener('storage', handleStorage);
+
+      return () => {
+        bc.close();
+        window.removeEventListener('storage', handleStorage);
+      };
+    } catch {
+      // safe fallback
+    }
+  }, [currentLevelNum, spawnTransferredPlatform]);
+
+  // Manual URL update handler (for Level 12)
   const handleUrlInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    markActive();
     const val = e.target.value;
     setUrlHashInput(val);
     if (
@@ -246,7 +393,7 @@ export const TerminalPlatformer: React.FC<TerminalPlatformerProps> = ({
       val.toLowerCase().includes('shift=true') ||
       val.toLowerCase().includes('shift')
     ) {
-      unlockDoor();
+      triggerUrlShiftUnlock();
     }
     try {
       window.history.replaceState(null, '', '#' + val.replace(/^[#?]/, ''));
@@ -258,9 +405,15 @@ export const TerminalPlatformer: React.FC<TerminalPlatformerProps> = ({
   // Keyboard Event Listeners
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      markActive();
+
       // Check CapsLock modifier
       if (e.getModifierState) {
-        setIsCapsActive(e.getModifierState('CapsLock'));
+        const capsState = e.getModifierState('CapsLock');
+        setIsCapsActive(capsState);
+        if (currentLevelNum === 3 && capsState) {
+          unlockDoor();
+        }
       }
       if (e.key === 'CapsLock') {
         const nextCaps = !isCapsActive;
@@ -286,8 +439,8 @@ export const TerminalPlatformer: React.FC<TerminalPlatformerProps> = ({
         }
       }
 
-      // Level 7: Dual Shift (Hold Left Shift + Right Shift)
-      if (currentLevelNum === 7) {
+      // Level 10: Dual Shift (Hold Left Shift + Right Shift raises both drawbridge halves)
+      if (currentLevelNum === 10) {
         if (e.code === 'ShiftLeft') leftShiftDownRef.current = true;
         if (e.code === 'ShiftRight') rightShiftDownRef.current = true;
         if (leftShiftDownRef.current && rightShiftDownRef.current) {
@@ -295,62 +448,83 @@ export const TerminalPlatformer: React.FC<TerminalPlatformerProps> = ({
         }
       }
 
-      // Level 6: Clipboard Cut & Paste (Ctrl+X, Ctrl+C, Ctrl+V)
-      if (currentLevelNum === 6) {
+      // Level 13: Perspective Shift simulation shortcut
+      if (currentLevelNum === 13 && e.altKey && e.shiftKey) {
+        applyOrientationStaircase();
+      }
+
+      // Level 7: Implicit Clipboard Cut & Paste (Ctrl+X, Ctrl+C, Ctrl+V)
+      if (currentLevelNum === 7) {
         const isCtrl = e.ctrlKey || e.metaKey;
         const key = e.key.toLowerCase();
-
-        // Check marquee box bounds
-        const sStart = selectionStartRef.current;
-        const sEnd = selectionEndRef.current;
-        const selBox = sStart && sEnd ? {
-          x: Math.min(sStart.x, sEnd.x),
-          y: Math.min(sStart.y, sEnd.y),
-          width: Math.abs(sEnd.x - sStart.x),
-          height: Math.abs(sEnd.y - sStart.y),
-        } : null;
+        const m = mouseCanvasPosRef.current;
 
         if (isCtrl && key === 'x') {
           e.preventDefault();
-          if (selBox) {
-            // Cut spikes inside selection
-            const remainingSpikes = spikesRef.current.filter((s) => !checkAABB(selBox, s));
-            if (remainingSpikes.length !== spikesRef.current.length) {
-              spikesRef.current = remainingSpikes;
-              sound.playShiftTrigger();
-              unlockDoor();
-            }
+          // Cut blocking spikes on the exit platform (or near cursor)
+          const beforeCount = spikesRef.current.length;
+          const remainingSpikes = spikesRef.current.filter((s) => {
+            if (s.id === 'l7-door-spikes') return false;
+            const dist = Math.hypot(m.x - (s.x + s.width / 2), m.y - (s.y + s.height / 2));
+            return dist > 180;
+          });
+          spikesRef.current = remainingSpikes;
+          if (remainingSpikes.length !== beforeCount) {
+            sound.playShiftTrigger();
           }
+          unlockDoor();
         } else if (isCtrl && key === 'c') {
           e.preventDefault();
-          if (selBox) {
-            // Copy platform inside selection
-            const foundPlat = platformsRef.current.find((p) => checkAABB(selBox, p));
-            if (foundPlat) {
-              clipboardPlatformRef.current = { ...foundPlat };
-              sound.playKeyClick();
-            }
+          const foundPlat =
+            platformsRef.current.find((p) => {
+              return (
+                m.x >= p.x - 30 &&
+                m.x <= p.x + p.width + 30 &&
+                m.y >= p.y - 30 &&
+                m.y <= p.y + p.height + 30
+              );
+            }) || platformsRef.current.find((p) => p.id === 'l7-source');
+          if (foundPlat) {
+            clipboardPlatformRef.current = { ...foundPlat };
+            sound.playKeyClick();
           }
         } else if (isCtrl && key === 'v') {
           e.preventDefault();
-          if (clipboardPlatformRef.current) {
-            const m = mouseCanvasPosRef.current;
-            const newPlat: Platform = {
-              ...clipboardPlatformRef.current,
-              id: `pasted-${Date.now()}`,
-              x: m.x - clipboardPlatformRef.current.width / 2,
-              y: m.y - clipboardPlatformRef.current.height / 2,
-            };
-            platformsRef.current.push(newPlat);
-            sound.playLand();
-            unlockDoor();
-          }
+          const template = clipboardPlatformRef.current || {
+            id: 'template',
+            x: 400,
+            y: 320,
+            width: 130,
+            height: 20,
+            originalX: 400,
+            originalY: 320,
+          };
+          // Paste platform at cursor (or in the middle of the 330px void if cursor hasn't moved)
+          const pasteX = Math.max(290, Math.min(500, m.x - template.width / 2));
+          const pasteY = Math.max(220, Math.min(350, m.y - template.height / 2));
+          const newPlat: Platform = {
+            ...template,
+            id: `pasted-${Date.now()}`,
+            x: pasteX,
+            y: pasteY,
+            width: 140,
+            height: 20,
+          };
+          platformsRef.current.push(newPlat);
+          sound.playLand();
+          unlockDoor();
         }
       }
 
       // Prevent scroll on gaming keys
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) {
         e.preventDefault();
+      }
+
+      // Proceed if Level Clear Modal is showing
+      if (showLevelClearedModal && (e.key === ' ' || e.key === 'Enter')) {
+        handleProceedNextLevel();
+        return;
       }
 
       // --- MOVEMENT INPUTS ---
@@ -383,7 +557,7 @@ export const TerminalPlatformer: React.FC<TerminalPlatformerProps> = ({
         setIsCapsActive(e.getModifierState('CapsLock'));
       }
 
-      if (currentLevelNum === 7) {
+      if (currentLevelNum === 10) {
         if (e.code === 'ShiftLeft') leftShiftDownRef.current = false;
         if (e.code === 'ShiftRight') rightShiftDownRef.current = false;
       }
@@ -406,7 +580,7 @@ export const TerminalPlatformer: React.FC<TerminalPlatformerProps> = ({
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [currentLevelNum, isCapsActive, loadLevel, unlockDoor]);
+  }, [applyOrientationStaircase, currentLevelNum, isCapsActive, loadLevel, markActive, showLevelClearedModal, unlockDoor]);
 
   const toggleMute = () => {
     const nextMuted = !isMuted;
@@ -427,37 +601,50 @@ export const TerminalPlatformer: React.FC<TerminalPlatformerProps> = ({
     };
   };
 
-  // Double-Click Handler (for Level 5 Geometry Shift)
+  // Mouse Wheel (Level 9 Tilt-Shift focus plane)
+  const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
+    markActive();
+    if (currentLevelNum !== 9) return;
+    
+    setTiltFocus((prev) => {
+      const next = Math.max(0, Math.min(1, prev + (e.deltaY > 0 ? 0.15 : -0.15)));
+      if (next >= 0.75) {
+        unlockDoor();
+      }
+      return next;
+    });
+  };
+
+  // Double-Click Handler (for Level 6 Geometry Shift)
   const handleCanvasDoubleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (currentLevelNum !== 5) return;
+    markActive();
+    if (currentLevelNum !== 6) return;
     const { x, y } = getCanvasMousePos(e);
 
     let shiftedSomething = false;
 
-    // Check platforms
+    // Check platforms: double-clicking the stranded high platforms shifts them down into a bridge!
     for (const p of platformsRef.current) {
       if (p.isShiftable && x >= p.x && x <= p.x + p.width && y >= p.y && y <= p.y + p.height) {
         p.isShifted = !p.isShifted;
         if (p.id === 'platform-mid-1') {
-          p.x = p.isShifted ? p.originalX + 110 : p.originalX;
-          p.y = p.isShifted ? p.originalY - 40 : p.originalY;
+          p.y = p.isShifted ? 330 : p.originalY;
         } else if (p.id === 'platform-mid-2') {
-          p.x = p.isShifted ? p.originalX + 60 : p.originalX;
-          p.y = p.isShifted ? p.originalY + 60 : p.originalY;
+          p.y = p.isShifted ? 330 : p.originalY;
         } else if (p.id === 'ground-left') {
-          p.width = p.isShifted ? 260 : 200;
+          p.width = p.isShifted ? 220 : 160;
         }
         shiftedSomething = true;
         break;
       }
     }
 
-    // Check spikes (shift them down into the void)
+    // Check spikes (shift them down off the landing pad)
     if (!shiftedSomething) {
       for (const s of spikesRef.current) {
         if (x >= s.x && x <= s.x + s.width && y >= s.y && y <= s.y + s.height) {
           s.isShifted = !s.isShifted;
-          s.y = s.isShifted ? s.originalY + 80 : s.originalY;
+          s.y = s.isShifted ? s.originalY + 120 : s.originalY;
           shiftedSomething = true;
           break;
         }
@@ -471,19 +658,12 @@ export const TerminalPlatformer: React.FC<TerminalPlatformerProps> = ({
 
   // Mouse Down
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    markActive();
     const coords = getCanvasMousePos(e);
     mouseCanvasPosRef.current = coords;
 
-    // Level 6: Clipboard Marquee Selection
-    if (currentLevelNum === 6) {
-      isSelectingMarqueeRef.current = true;
-      selectionStartRef.current = coords;
-      selectionEndRef.current = coords;
-      return;
-    }
-
-    // Level 5: Dragging platforms & spikes
-    if (currentLevelNum === 5) {
+    // Level 6 & Level 14: Dragging platforms & spikes
+    if (currentLevelNum === 6 || currentLevelNum === 14) {
       for (const p of platformsRef.current) {
         if (p.isShiftable && coords.x >= p.x && coords.x <= p.x + p.width && coords.y >= p.y && coords.y <= p.y + p.height) {
           draggingItemRef.current = {
@@ -498,7 +678,7 @@ export const TerminalPlatformer: React.FC<TerminalPlatformerProps> = ({
       }
 
       for (const s of spikesRef.current) {
-        if (coords.x >= s.x && coords.x <= s.x + s.width && coords.y >= s.y && coords.y <= s.y + s.height) {
+        if (s.isShiftable && coords.x >= s.x && coords.x <= s.x + s.width && coords.y >= s.y && coords.y <= s.y + s.height) {
           draggingItemRef.current = {
             type: 'spike',
             id: s.id,
@@ -514,29 +694,44 @@ export const TerminalPlatformer: React.FC<TerminalPlatformerProps> = ({
 
   // Mouse Move
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    markActive();
     const coords = getCanvasMousePos(e);
     mouseCanvasPosRef.current = coords;
 
-    // Level 6 Marquee update
-    if (currentLevelNum === 6 && isSelectingMarqueeRef.current) {
-      selectionEndRef.current = coords;
-      return;
-    }
-
-    // Level 5 Dragging
-    if (currentLevelNum === 5 && draggingItemRef.current) {
+    if ((currentLevelNum === 6 || currentLevelNum === 14) && draggingItemRef.current) {
       const drag = draggingItemRef.current;
       if (drag.type === 'platform') {
         const p = platformsRef.current.find((item) => item.id === drag.id);
         if (p) {
-          p.x = Math.max(0, Math.min(780 - p.width, coords.x - drag.offsetX));
-          p.y = Math.max(50, Math.min(420 - p.height, coords.y - drag.offsetY));
+          p.x = Math.max(0, Math.min(840, coords.x - drag.offsetX));
+          p.y = Math.max(40, Math.min(420 - p.height, coords.y - drag.offsetY));
+
+          // Level 14: Check if dragged off the right edge to transfer to Window B!
+          if (currentLevelNum === 14 && p.x + p.width >= 770) {
+            if (broadcastChannelRef.current) {
+              broadcastChannelRef.current.postMessage({
+                type: 'TRANSFER_PLATFORM',
+                platform: p,
+              });
+            }
+            try {
+              localStorage.setItem('shift_multiverse_transfer', Date.now().toString());
+            } catch {
+              // ignore
+            }
+
+            sound.playShiftTrigger();
+            // Also materialize in current window after 700ms if playing single-window
+            setTimeout(() => {
+              spawnTransferredPlatform();
+            }, 700);
+          }
         }
       } else if (drag.type === 'spike') {
         const s = spikesRef.current.find((item) => item.id === drag.id);
         if (s) {
           s.x = Math.max(0, Math.min(780 - s.width, coords.x - drag.offsetX));
-          s.y = Math.max(50, Math.min(440 - s.height, coords.y - drag.offsetY));
+          s.y = Math.max(40, Math.min(480, coords.y - drag.offsetY));
         }
       }
     }
@@ -544,31 +739,35 @@ export const TerminalPlatformer: React.FC<TerminalPlatformerProps> = ({
 
   // Mouse Up
   const handleMouseUp = () => {
-    if (currentLevelNum === 6 && isSelectingMarqueeRef.current) {
-      isSelectingMarqueeRef.current = false;
-    }
-
-    if (currentLevelNum === 5 && draggingItemRef.current) {
+    markActive();
+    if (draggingItemRef.current) {
       sound.playLand();
       draggingItemRef.current = null;
-      unlockDoor();
+      if (currentLevelNum === 6) {
+        unlockDoor();
+      }
     }
   };
 
   // Next level sequence
   const handleLevelWin = useCallback(() => {
     setIsWon(true);
-    setTransitioning(true);
+    setClearedLevelInfo({
+      num: currentLevelNum,
+      explanation: levelData.shiftExplanation,
+    });
+    setShowLevelClearedModal(true);
+  }, [currentLevelNum, levelData.shiftExplanation]);
 
-    setTimeout(() => {
-      if (currentLevelNum < TOTAL_LEVELS) {
-        loadLevel(currentLevelNum + 1);
-      } else {
-        setAllLevelsCompleted(true);
-        setFinalTime(Math.round((Date.now() - startTime) / 1000));
-      }
-    }, 1000);
-  }, [currentLevelNum, loadLevel, startTime]);
+  const handleProceedNextLevel = () => {
+    setShowLevelClearedModal(false);
+    if (currentLevelNum < TOTAL_LEVELS) {
+      loadLevel(currentLevelNum + 1);
+    } else {
+      setAllLevelsCompleted(true);
+      setFinalTime(Math.round((Date.now() - startTime) / 1000));
+    }
+  };
 
   // Main 60FPS Game Loop
   useEffect(() => {
@@ -580,12 +779,49 @@ export const TerminalPlatformer: React.FC<TerminalPlatformerProps> = ({
     let animationFrameId: number;
 
     const gameLoop = () => {
+      // 0. Update Sliding-Down Close Animation at Start
+      if (doorRef.current.closeAnimProgress !== undefined && doorRef.current.closeAnimProgress < 1) {
+        doorRef.current.closeAnimProgress = Math.min(1, doorRef.current.closeAnimProgress + 0.05);
+      }
+
+      // Check Level 8 Work Shift Idle Timeout (8 seconds of inactivity)
+      if (currentLevelNum === 8 && !isWon && !showLevelClearedModal) {
+        const idleTime = Date.now() - lastActiveTimeRef.current;
+        if (idleTime >= 8000) {
+          playerRef.current.isAutoWalking = true;
+          doorRef.current.isOpen = true;
+        }
+      }
+
+      // Update Level 9 Tilt-Shift background bridge platform opacity
+      if (currentLevelNum === 9) {
+        for (const p of platformsRef.current) {
+          if (p.isBackgroundBridge) {
+            p.opacity = tiltFocus;
+          }
+        }
+      }
+
+      // Update Level 10 Dual-Shift drawbridge halves
+      if (currentLevelNum === 10) {
+        for (const p of platformsRef.current) {
+          if (p.id === 'dual-bridge-left') {
+            const targetY = doorRef.current.isOpen || leftShiftDownRef.current ? 310 : 415;
+            p.y += (targetY - p.y) * 0.25;
+          } else if (p.id === 'dual-bridge-right') {
+            const targetY = doorRef.current.isOpen || rightShiftDownRef.current ? 310 : 415;
+            p.y += (targetY - p.y) * 0.25;
+          }
+        }
+      }
+
       // 1. Update Physics
-      if (!isWon && !transitioning && !allLevelsCompleted) {
-        // If Level 3 Caps Lock is active, spikes are harmless miniature bumps
+      if (!isWon && !showLevelClearedModal && !allLevelsCompleted) {
         const activeSpikes =
           currentLevelNum === 3 && isCapsActive
-            ? [] // No lethal collision when Caps Lock is active!
+            ? [] // Harmless when Caps Lock shrinks spikes to lowercase!
+            : currentLevelNum === 9 && tiltFocus > 0.6
+            ? [] // Harmless when blurred out of focus in Level 9!
             : spikesRef.current;
 
         updatePlayer(
@@ -606,12 +842,23 @@ export const TerminalPlatformer: React.FC<TerminalPlatformerProps> = ({
           () => {
             // On Win
             handleLevelWin();
+          },
+          {
+            isObjectiveShiftLeft: currentLevelNum === 5,
           }
         );
       }
 
       // 2. Render Frame
       ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      ctx.save();
+      // Level 13: subtle perspective shift indicator when rotated
+      if (currentLevelNum === 13 && isRotatedPerspective) {
+        ctx.translate(canvas.width / 2, canvas.height / 2);
+        ctx.rotate(0.02);
+        ctx.translate(-canvas.width / 2, -canvas.height / 2);
+      }
 
       // Background CRT Grid
       ctx.fillStyle = '#06090a';
@@ -635,6 +882,20 @@ export const TerminalPlatformer: React.FC<TerminalPlatformerProps> = ({
 
       // Draw Platforms (Clean, without text/labels)
       for (const plat of platformsRef.current) {
+        if (plat.isBackgroundBridge) {
+          const alpha = plat.opacity ?? 0;
+          if (alpha <= 0.05) continue;
+          ctx.save();
+          ctx.globalAlpha = alpha;
+          ctx.fillStyle = '#0e2617';
+          ctx.fillRect(plat.x, plat.y, plat.width, plat.height);
+          ctx.strokeStyle = alpha > 0.6 ? '#00FF66' : 'rgba(0, 255, 102, 0.4)';
+          ctx.lineWidth = 1.5;
+          ctx.strokeRect(plat.x, plat.y, plat.width, plat.height);
+          ctx.restore();
+          continue;
+        }
+
         ctx.save();
         ctx.fillStyle = '#0b1610';
         ctx.fillRect(plat.x, plat.y, plat.width, plat.height);
@@ -656,41 +917,49 @@ export const TerminalPlatformer: React.FC<TerminalPlatformerProps> = ({
       }
 
       // Draw Spikes
-      // In Level 3 with Caps Lock ON: spikes shrink to tiny cute bumps
-      const isShrunkSpikes = currentLevelNum === 3 && isCapsActive;
+      const isMiniatureSpikes = currentLevelNum === 3 && isCapsActive;
+      const isTiltBlurred = currentLevelNum === 9 && tiltFocus > 0.2;
 
       for (const spike of spikesRef.current) {
         ctx.save();
         const toothWidth = spike.width / spike.count;
-        ctx.fillStyle = isShrunkSpikes ? '#15241b' : '#2a0a0e';
-        ctx.strokeStyle = isShrunkSpikes ? '#00FF66' : '#FF3344';
-        ctx.lineWidth = 1.5;
-
-        const effectiveHeight = isShrunkSpikes ? 4 : spike.height;
         const baseY = spike.y + spike.height;
+
+        if (isTiltBlurred) {
+          ctx.fillStyle = `rgba(255, 51, 68, ${Math.max(0.1, 1 - tiltFocus * 1.1)})`;
+          for (let i = 0; i < spike.count; i++) {
+            const sx = spike.x + i * toothWidth + toothWidth / 2;
+            const r = 6 + tiltFocus * 12;
+            ctx.beginPath();
+            ctx.arc(sx, baseY - 6, r, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          ctx.restore();
+          continue;
+        }
+
+        ctx.fillStyle = '#2a0a0e';
+        ctx.strokeStyle = '#FF3344';
+        ctx.lineWidth = 1.5;
+        const effectiveHeight = isMiniatureSpikes ? 4 : spike.height;
 
         for (let i = 0; i < spike.count; i++) {
           const sx = spike.x + i * toothWidth;
           ctx.beginPath();
-          if (isShrunkSpikes) {
-            // Tiny lowercase rounded bumps
-            ctx.ellipse(sx + toothWidth / 2, baseY - 2, toothWidth / 2.5, 3, 0, 0, Math.PI * 2);
-          } else {
-            // Sharp lethal spikes
-            ctx.moveTo(sx, baseY);
-            ctx.lineTo(sx + toothWidth / 2, baseY - effectiveHeight);
-            ctx.lineTo(sx + toothWidth, baseY);
-            ctx.closePath();
-          }
+          ctx.moveTo(sx, baseY);
+          ctx.lineTo(sx + toothWidth / 2, baseY - effectiveHeight);
+          ctx.lineTo(sx + toothWidth, baseY);
+          ctx.closePath();
           ctx.fill();
           ctx.stroke();
         }
         ctx.restore();
       }
 
-      // Draw Vertical Wall & Dotted Door along Right Edge
+      // Draw Vertical Wall & Sliding-Down Dashed Door along Right Edge
       const door = doorRef.current;
       const wallX = door.x;
+      const closeProgress = door.closeAnimProgress ?? 1;
       ctx.save();
       ctx.lineWidth = 2;
 
@@ -701,27 +970,22 @@ export const TerminalPlatformer: React.FC<TerminalPlatformerProps> = ({
       ctx.lineTo(wallX, door.y);
       ctx.stroke();
 
-      // 2. Door segment along the vertical wall
-      if (door.isOpen) {
-        // Unlocked door: rendered as a vibrant dotted line
+      // 2. Door segment
+      if (!door.isOpen) {
         ctx.save();
         ctx.strokeStyle = '#00FF66';
         ctx.lineWidth = 2.5;
-        ctx.setLineDash([4, 4]); // DOTTED LINE
-        ctx.shadowColor = '#00FF66';
-        ctx.shadowBlur = 8;
+        ctx.setLineDash([4, 4]);
         ctx.beginPath();
         ctx.moveTo(wallX, door.y);
-        ctx.lineTo(wallX, door.y + door.height);
+        ctx.lineTo(wallX, door.y + door.height * closeProgress);
         ctx.stroke();
         ctx.restore();
       } else {
-        // Locked door: solid wall line
-        ctx.strokeStyle = '#00FF66';
-        ctx.beginPath();
-        ctx.moveTo(wallX, door.y);
-        ctx.lineTo(wallX, door.y + door.height);
-        ctx.stroke();
+        ctx.save();
+        ctx.fillStyle = 'rgba(0, 255, 102, 0.08)';
+        ctx.fillRect(wallX - 6, door.y, 12, door.height);
+        ctx.restore();
       }
 
       // 3. Solid wall below the door gap
@@ -731,25 +995,6 @@ export const TerminalPlatformer: React.FC<TerminalPlatformerProps> = ({
       ctx.stroke();
 
       ctx.restore();
-
-      // Draw Selection Marquee (Level 6)
-      if (currentLevelNum === 6 && selectionStartRef.current && selectionEndRef.current) {
-        const sx = Math.min(selectionStartRef.current.x, selectionEndRef.current.x);
-        const sy = Math.min(selectionStartRef.current.y, selectionEndRef.current.y);
-        const sw = Math.abs(selectionEndRef.current.x - selectionStartRef.current.x);
-        const sh = Math.abs(selectionEndRef.current.y - selectionStartRef.current.y);
-
-        if (sw > 3 || sh > 3) {
-          ctx.save();
-          ctx.strokeStyle = '#00FF66';
-          ctx.lineWidth = 1.5;
-          ctx.setLineDash([4, 4]);
-          ctx.fillStyle = 'rgba(0, 255, 102, 0.08)';
-          ctx.fillRect(sx, sy, sw, sh);
-          ctx.strokeRect(sx, sy, sw, sh);
-          ctx.restore();
-        }
-      }
 
       // Draw Player
       const player = playerRef.current;
@@ -764,6 +1009,13 @@ export const TerminalPlatformer: React.FC<TerminalPlatformerProps> = ({
         ctx.fillStyle = '#080b0e';
         const eyeX = player.facing === 'right' ? player.x + player.width - 7 : player.x + 2;
         ctx.fillRect(eyeX, player.y + 5, 5, 5);
+
+        if (player.isAutoWalking) {
+          ctx.fillStyle = '#00FF66';
+          ctx.font = '8px monospace';
+          ctx.fillText('SHIFT OVER', player.x - 12, player.y - 4);
+        }
+
         ctx.restore();
       }
 
@@ -785,17 +1037,7 @@ export const TerminalPlatformer: React.FC<TerminalPlatformerProps> = ({
         }
       }
 
-      // Level Transition Wipe
-      if (transitioning) {
-        ctx.save();
-        ctx.fillStyle = 'rgba(0, 255, 102, 0.2)';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.fillStyle = '#00FF66';
-        ctx.font = 'bold 20px monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText(`LEVEL 0${currentLevelNum} CLEARED`, canvas.width / 2, canvas.height / 2);
-        ctx.restore();
-      }
+      ctx.restore(); // End perspective transform
 
       animationFrameId = requestAnimationFrame(gameLoop);
     };
@@ -805,7 +1047,7 @@ export const TerminalPlatformer: React.FC<TerminalPlatformerProps> = ({
     return () => {
       cancelAnimationFrame(animationFrameId);
     };
-  }, [allLevelsCompleted, currentLevelNum, handleLevelWin, isCapsActive, isWon, levelData, transitioning]);
+  }, [allLevelsCompleted, currentLevelNum, handleLevelWin, isCapsActive, isRotatedPerspective, isWon, levelData, showLevelClearedModal, tiltFocus]);
 
   // Labels casing format (for Level 3 Caps Lock Shift)
   const formatLabel = (text: string) => {
@@ -824,14 +1066,38 @@ export const TerminalPlatformer: React.FC<TerminalPlatformerProps> = ({
       <div className="relative z-10 w-full max-w-[840px] bg-[#090d10] border border-[#00FF66]/30 rounded-lg shadow-2xl p-3 sm:p-5 flex flex-col gap-3">
         {/* Terminal Header Bar (100% Identical on Every Level) */}
         <div className="flex items-center justify-between border-b border-[#00FF66]/20 pb-3">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5">
             <span className="text-sm font-bold tracking-widest terminal-glow">
-              {formatLabel(`LEVEL 0${currentLevelNum}`)}
+              {formatLabel(`LEVEL ${currentLevelNum < 10 ? '0' + currentLevelNum : currentLevelNum}`)}
             </span>
+            {levelData.subtleTitle && (
+              <>
+                <span className="text-[#00FF66]/40 text-xs select-none">//</span>
+                <span className="text-xs font-semibold tracking-wider text-[#7EE787]">
+                  {formatLabel(levelData.subtleTitle)}
+                </span>
+              </>
+            )}
           </div>
 
           {/* Clean Controls */}
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                sound.playKeyClick();
+                setShowHint((prev) => !prev);
+              }}
+              className={`flex items-center gap-1.5 px-2.5 py-1 text-xs border rounded transition-colors ${
+                showHint
+                  ? 'bg-[#00FF66] text-black border-[#00FF66] font-bold'
+                  : 'border-[#00FF66]/30 hover:border-[#00FF66] text-[#00FF66] hover:bg-[#00FF66]/10'
+              }`}
+              title="Toggle Level Hint"
+            >
+              <HelpCircle className="w-3.5 h-3.5" />
+              <span>{formatLabel('HINT')}</span>
+            </button>
+
             <button
               onClick={() => loadLevel(currentLevelNum)}
               className="flex items-center gap-1.5 px-2.5 py-1 text-xs border border-[#00FF66]/30 hover:border-[#00FF66] text-[#00FF66] hover:bg-[#00FF66]/10 rounded transition-colors"
@@ -861,8 +1127,24 @@ export const TerminalPlatformer: React.FC<TerminalPlatformerProps> = ({
           </div>
         </div>
 
-        {/* Level 9: URL Address input bar */}
-        {currentLevelNum === 9 && (
+        {/* Collapsible Level Hint Box */}
+        {showHint && (
+          <div className="bg-[#050806] border border-[#00FF66]/40 px-3.5 py-2.5 rounded text-xs text-[#7EE787] flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <HelpCircle className="w-4 h-4 text-[#00FF66] shrink-0" />
+              <span>{formatLabel(levelData.hint)}</span>
+            </div>
+            <button
+              onClick={() => setShowHint(false)}
+              className="text-[10px] text-zinc-400 hover:text-[#00FF66] shrink-0 font-bold"
+            >
+              {formatLabel('[HIDE]')}
+            </button>
+          </div>
+        )}
+
+        {/* Level 12: URL Address input bar */}
+        {currentLevelNum === 12 && (
           <div className="flex items-center gap-2 bg-[#050709] border border-[#00FF66]/30 px-2.5 py-1 rounded text-xs">
             <span className="text-zinc-500 font-bold">URL:</span>
             <span className="text-zinc-400">.../game</span>
@@ -881,6 +1163,7 @@ export const TerminalPlatformer: React.FC<TerminalPlatformerProps> = ({
             ref={canvasRef}
             width={800}
             height={450}
+            onWheel={handleWheel}
             onDoubleClick={handleCanvasDoubleClick}
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
@@ -923,16 +1206,47 @@ export const TerminalPlatformer: React.FC<TerminalPlatformerProps> = ({
           </div>
         </div>
 
+        {/* Level Cleared Explanation Modal */}
+        {showLevelClearedModal && clearedLevelInfo && (
+          <div className="fixed inset-0 z-30 bg-black/85 flex items-center justify-center p-4">
+            <div className="w-full max-w-md bg-[#090d10] border-2 border-[#00FF66] rounded-lg p-5 flex flex-col gap-3 shadow-2xl terminal-box-glow">
+              <div className="flex items-center gap-2 border-b border-[#00FF66]/20 pb-2">
+                <CheckCircle2 className="w-5 h-5 text-[#00FF66]" />
+                <span className="text-sm font-bold tracking-widest text-[#00FF66] terminal-glow">
+                  LEVEL {clearedLevelInfo.num < 10 ? '0' + clearedLevelInfo.num : clearedLevelInfo.num} CLEARED
+                </span>
+              </div>
+
+              <div className="bg-[#050709] border border-[#00FF66]/30 p-3 rounded text-xs space-y-1.5">
+                <span className="text-[10px] text-zinc-500 font-bold tracking-wider block">
+                  &gt;&gt; SHIFT INTERPRETATION:
+                </span>
+                <p className="text-[#00FF66] font-semibold leading-relaxed">
+                  {clearedLevelInfo.explanation}
+                </p>
+              </div>
+
+              <button
+                onClick={handleProceedNextLevel}
+                className="w-full py-2.5 bg-[#00FF66] hover:bg-[#00FF66]/90 text-black font-extrabold text-xs tracking-wider rounded transition-colors flex items-center justify-center gap-2 mt-1 shadow-[0_0_15px_rgba(0,255,102,0.3)]"
+              >
+                <span>PROCEED TO NEXT LEVEL</span>
+                <ArrowRight className="w-4 h-4 text-black" />
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Victory Screen Modal */}
         {allLevelsCompleted && (
           <div className="fixed inset-0 z-30 bg-black/90 flex items-center justify-center p-4">
             <div className="w-full max-w-md bg-[#090d10] border-2 border-[#00FF66] rounded-lg p-6 flex flex-col items-center gap-4 text-center terminal-box-glow">
               <CheckCircle2 className="w-12 h-12 text-[#00FF66] animate-bounce" />
               <h2 className="text-2xl font-black text-[#00FF66] terminal-glow tracking-widest">
-                SHIFT MASTERED: 9/9
+                SHIFT MASTERED: 14/14
               </h2>
               <p className="text-xs text-zinc-400">
-                You conquered all 9 levels and cracked every creative interpretation of SHIFT!
+                You conquered all 14 levels and cracked every creative interpretation of SHIFT!
               </p>
 
               <div className="w-full bg-[#050709] border border-[#00FF66]/30 p-3 rounded text-left text-xs space-y-1.5">
@@ -946,7 +1260,7 @@ export const TerminalPlatformer: React.FC<TerminalPlatformerProps> = ({
                 </div>
                 <div className="flex justify-between">
                   <span className="text-zinc-400">Campaign Levels:</span>
-                  <span className="text-[#00FF66] font-bold">9 Sectors Completed</span>
+                  <span className="text-[#00FF66] font-bold">14 Sectors Completed</span>
                 </div>
               </div>
 

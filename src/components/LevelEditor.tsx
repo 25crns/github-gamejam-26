@@ -1,6 +1,6 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { LevelData, Platform, Spike, DoorWall, ShiftType } from '../game/types';
-import { createBaseLayout, getCustomLevels, saveCustomLevel, deleteCustomLevel } from '../game/levels';
+import { createBaseLayout, getCustomLevels, saveCustomLevel, deleteCustomLevel, getLevelData, TOTAL_LEVELS } from '../game/levels';
 import { updatePlayer, InputState } from '../game/physics';
 import { sound } from '../audio/soundEngine';
 import {
@@ -12,10 +12,8 @@ import {
   Copy,
   Check,
   RotateCcw,
-  Sliders,
-  ChevronRight,
-  FolderOpen,
   ArrowLeft,
+  FolderOpen,
 } from 'lucide-react';
 
 interface LevelEditorProps {
@@ -23,15 +21,15 @@ interface LevelEditorProps {
   onPlayLevel?: (level: LevelData) => void;
 }
 
-export const LevelEditor: React.FC<LevelEditorProps> = ({ onBack, onPlayLevel }) => {
+export const LevelEditor: React.FC<LevelEditorProps> = ({ onBack }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // Editor Mode: 'EDIT' or 'TEST_PLAY'
   const [mode, setMode] = useState<'EDIT' | 'TEST_PLAY'>('EDIT');
 
   // Level Metadata
-  const [levelId, setLevelId] = useState<number>(4);
-  const [levelTitle, setLevelTitle] = useState<string>('LEVEL 04');
+  const [levelId, setLevelId] = useState<number>(13);
+  const [levelTitle, setLevelTitle] = useState<string>('LEVEL 13');
   const [shiftType, setShiftType] = useState<ShiftType>('KEY_SHIFT');
   const [mechanicNote, setMechanicNote] = useState<string>('');
 
@@ -77,6 +75,24 @@ export const LevelEditor: React.FC<LevelEditorProps> = ({ onBack, onPlayLevel })
   // Dragging interaction state in Editor
   const isDraggingRef = useRef<boolean>(false);
   const dragOffsetRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  // Load an existing level template (Level 1 to 12)
+  const handleLoadTemplate = (lvlNum: number) => {
+    sound.playKeyClick();
+    const data = getLevelData(lvlNum);
+    setLevelId(lvlNum);
+    setLevelTitle(data.title);
+    setShiftType(data.shiftType);
+    setPlayerStart({ ...data.playerStart });
+    setDoor({ ...data.door, isOpen: false });
+    setPlatforms(data.platforms.map((p) => ({ ...p })));
+    setSpikes(data.spikes.map((s) => ({ ...s })));
+    setMechanicNote(data.shiftExplanation || '');
+    setSelectedId(null);
+    setSelectedType(null);
+    setSaveToast(`LOADED ${data.title}`);
+    setTimeout(() => setSaveToast(null), 2000);
+  };
 
   // Load baseline template
   const handleResetToBase = () => {
@@ -147,7 +163,10 @@ export const LevelEditor: React.FC<LevelEditorProps> = ({ onBack, onPlayLevel })
     const levelData: LevelData = {
       id: levelId,
       title: levelTitle,
+      subtleTitle: 'CUSTOM SHIFT',
+      hint: mechanicNote || 'Experiment with shift to unlock the exit.',
       shiftType,
+      shiftExplanation: mechanicNote || `Shift explanation for ${levelTitle}`,
       playerStart,
       door,
       platforms,
@@ -167,7 +186,10 @@ export const LevelEditor: React.FC<LevelEditorProps> = ({ onBack, onPlayLevel })
     const levelData: LevelData = {
       id: levelId,
       title: levelTitle,
+      subtleTitle: 'CUSTOM SHIFT',
+      hint: mechanicNote || 'Experiment with shift to unlock the exit.',
       shiftType,
+      shiftExplanation: mechanicNote || 'Shift description',
       playerStart,
       door: {
         x: door.x,
@@ -245,7 +267,6 @@ export const LevelEditor: React.FC<LevelEditorProps> = ({ onBack, onPlayLevel })
       if (e.key === 'w' || e.key === 'W' || e.key === 'ArrowUp' || e.key === ' ') testInputsRef.current.jump = true;
       if (e.key === 'Shift') {
         testInputsRef.current.shift = true;
-        // In test mode, Shift opens door to test exit passage
         door.isOpen = !door.isOpen;
         sound.playShiftTrigger();
       }
@@ -529,7 +550,6 @@ export const LevelEditor: React.FC<LevelEditorProps> = ({ onBack, onPlayLevel })
 
       // Draw Player Start / Live Player
       if (mode === 'EDIT') {
-        // Spawn beacon
         ctx.save();
         ctx.strokeStyle = selectedId === 'playerStart' ? '#FFFFFF' : '#00FF66';
         ctx.lineWidth = 1.5;
@@ -541,7 +561,6 @@ export const LevelEditor: React.FC<LevelEditorProps> = ({ onBack, onPlayLevel })
         ctx.fillText('SPAWN', playerStart.x - 4, playerStart.y - 4);
         ctx.restore();
       } else {
-        // Live Test Player
         const p = testPlayerRef.current;
         if (!p.isDead) {
           ctx.save();
@@ -635,6 +654,44 @@ export const LevelEditor: React.FC<LevelEditorProps> = ({ onBack, onPlayLevel })
           </div>
         </div>
 
+        {/* Level Selector & Template Loader */}
+        <div className="flex flex-wrap items-center justify-between gap-2 bg-[#040608] border border-[#00FF66]/30 p-2 rounded text-xs">
+          <div className="flex items-center gap-2">
+            <span className="text-zinc-400 font-bold flex items-center gap-1">
+              <FolderOpen className="w-3.5 h-3.5 text-[#00FF66]" />
+              LOAD EXISTING LEVEL:
+            </span>
+            <select
+              onChange={(e) => {
+                const val = parseInt(e.target.value);
+                if (val) handleLoadTemplate(val);
+              }}
+              value=""
+              className="bg-black border border-[#00FF66]/50 px-2 py-1 rounded text-[#00FF66] font-mono"
+            >
+              <option value="" disabled>-- Select Level (1 to {TOTAL_LEVELS}) --</option>
+              {Array.from({ length: TOTAL_LEVELS }, (_, i) => i + 1).map((num) => {
+                const lvl = getLevelData(num);
+                return (
+                  <option key={num} value={num}>
+                    Level {num < 10 ? '0' + num : num}: {lvl.shiftType}
+                  </option>
+                );
+              })}
+            </select>
+          </div>
+
+          <label className="flex items-center gap-1.5 cursor-pointer text-zinc-400">
+            <input
+              type="checkbox"
+              checked={snapToGrid}
+              onChange={(e) => setSnapToGrid(e.target.checked)}
+              className="accent-[#00FF66]"
+            />
+            <span>Snap 10px</span>
+          </label>
+        </div>
+
         {/* Level Identity Form */}
         <div className="flex flex-wrap items-center gap-3 bg-[#040608] border border-[#00FF66]/20 p-2 rounded text-xs">
           <div className="flex items-center gap-1.5">
@@ -657,36 +714,29 @@ export const LevelEditor: React.FC<LevelEditorProps> = ({ onBack, onPlayLevel })
             />
           </div>
 
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5 flex-1 min-w-[200px]">
             <span className="text-zinc-500">SHIFT TYPE:</span>
             <select
               value={shiftType}
               onChange={(e) => setShiftType(e.target.value as ShiftType)}
-              className="bg-black border border-[#00FF66]/40 px-2 py-0.5 rounded text-[#00FF66]"
+              className="w-full bg-black border border-[#00FF66]/40 px-2 py-0.5 rounded text-[#00FF66]"
             >
               <option value="KEY_SHIFT">1. KEY_SHIFT (Physical Shift Key)</option>
               <option value="TYPE_SHIFT">2. TYPE_SHIFT (Type 'shift' on keyboard)</option>
               <option value="CAPS_SHIFT">3. CAPS_SHIFT (Caps Lock Case Shift)</option>
               <option value="CONTROLS_SHIFT">4. CONTROLS_SHIFT (Shifted Keycaps)</option>
-              <option value="GEOMETRY_SHIFT">5. GEOMETRY_SHIFT (Click/Double Click Shift)</option>
-              <option value="CLIPBOARD_SHIFT">6. CLIPBOARD_SHIFT (Ctrl+X Cut / Ctrl+V Paste)</option>
-              <option value="DUAL_SHIFT">7. DUAL_SHIFT (Left Shift + Right Shift)</option>
-              <option value="TAB_SHIFT">8. TAB_SHIFT (Switch Browser Tab)</option>
-              <option value="URL_SHIFT">9. URL_SHIFT (URL Hash/Query Shift)</option>
-              <option value="CUSTOM">CUSTOM (Describe in note)</option>
+              <option value="OBJECTIVE_SHIFT">5. OBJECTIVE_SHIFT (Walk off Left Edge)</option>
+              <option value="GEOMETRY_SHIFT">6. GEOMETRY_SHIFT (Click/Double Click Shift)</option>
+              <option value="CLIPBOARD_SHIFT">7. CLIPBOARD_SHIFT (Ctrl+X Cut / Ctrl+V Paste)</option>
+              <option value="WORK_SHIFT">8. WORK_SHIFT (8s Idle Clock-Out)</option>
+              <option value="TILT_SHIFT">9. TILT_SHIFT (Mouse Wheel Focus Lens)</option>
+              <option value="DUAL_SHIFT">10. DUAL_SHIFT (Left Shift + Right Shift)</option>
+              <option value="TAB_SHIFT">11. TAB_SHIFT (Switch Browser Tab)</option>
+              <option value="URL_SHIFT">12. URL_SHIFT (URL Hash/Query Shift)</option>
+              <option value="ORIENTATION_SHIFT">13. ORIENTATION_SHIFT (Rotate Display Perspective)</option>
+              <option value="DUAL_WINDOW_SHIFT">14. DUAL_WINDOW_SHIFT (Dual-Window Bridge)</option>
+              <option value="CUSTOM">CUSTOM</option>
             </select>
-          </div>
-
-          <div className="flex items-center gap-2 ml-auto">
-            <label className="flex items-center gap-1.5 cursor-pointer text-zinc-400">
-              <input
-                type="checkbox"
-                checked={snapToGrid}
-                onChange={(e) => setSnapToGrid(e.target.checked)}
-                className="accent-[#00FF66]"
-              />
-              <span>Snap 10px</span>
-            </label>
           </div>
         </div>
 
@@ -866,6 +916,7 @@ export const LevelEditor: React.FC<LevelEditorProps> = ({ onBack, onPlayLevel })
                             setDoor(lvl.door);
                             setPlatforms(lvl.platforms);
                             setSpikes(lvl.spikes);
+                            setMechanicNote(lvl.customMechanicNote || '');
                             setShowExportModal(false);
                             sound.playKeyClick();
                           }}

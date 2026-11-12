@@ -17,6 +17,8 @@ export interface Platform extends Rect {
   isShifted?: boolean;
   shiftOffsetX?: number;
   shiftOffsetY?: number;
+  isBackgroundBridge?: boolean; // For Tilt-Shift level
+  opacity?: number;
 }
 
 export interface Spike extends Rect {
@@ -35,6 +37,7 @@ export interface DoorWall {
   y: number; // Top of the door gap (e.g. 280)
   height: number; // Height of the door gap (e.g. 90)
   isOpen: boolean;
+  closeAnimProgress?: number; // 0 to 1 for initial slide-down closing animation
 }
 
 export interface Player extends Rect {
@@ -44,6 +47,7 @@ export interface Player extends Rect {
   facing: 'left' | 'right';
   isDead: boolean;
   respawnTimer: number;
+  isAutoWalking?: boolean; // For Work Shift idle timeout
 }
 
 export type ShiftType =
@@ -51,17 +55,25 @@ export type ShiftType =
   | 'TYPE_SHIFT'
   | 'CAPS_SHIFT'
   | 'CONTROLS_SHIFT'
+  | 'OBJECTIVE_SHIFT'
   | 'GEOMETRY_SHIFT'
   | 'CLIPBOARD_SHIFT'
+  | 'WORK_SHIFT'
+  | 'TILT_SHIFT'
   | 'DUAL_SHIFT'
   | 'TAB_SHIFT'
   | 'URL_SHIFT'
+  | 'ORIENTATION_SHIFT'
+  | 'DUAL_WINDOW_SHIFT'
   | 'CUSTOM';
 
 export interface LevelData {
   id: number;
   title: string;
+  subtleTitle: string;
+  hint: string;
   shiftType: ShiftType;
+  shiftExplanation: string;
   playerStart: { x: number; y: number };
   door: DoorWall;
   platforms: Platform[];
