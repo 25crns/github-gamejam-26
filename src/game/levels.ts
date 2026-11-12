@@ -111,9 +111,11 @@ export function createBaseLayout(): {
   return { playerStart, door, platforms, spikes };
 }
 
+export const TOTAL_LEVELS = 9;
+
 /**
- * Returns Level Data for the given level index (1, 2, or 3).
- * Identical layout and clean presentation without hints or spoilers.
+ * Returns Level Data for any level index from 1 to 9.
+ * All levels share the identical base layout and visual presentation.
  */
 export function getLevelData(levelNum: number): LevelData {
   const customLevels = getCustomLevels();
@@ -123,12 +125,14 @@ export function getLevelData(levelNum: number): LevelData {
   }
 
   const base = createBaseLayout();
+  const title = `LEVEL 0${levelNum}`;
 
   switch (levelNum) {
     case 1:
+      // Difficulty 1: Press the Shift key
       return {
         id: 1,
-        title: 'LEVEL 01',
+        title,
         shiftType: 'KEY_SHIFT',
         playerStart: base.playerStart,
         door: base.door,
@@ -137,10 +141,11 @@ export function getLevelData(levelNum: number): LevelData {
       };
 
     case 2:
+      // Difficulty 2: Type 's'-'h'-'i'-'f'-'t'
       return {
         id: 2,
-        title: 'LEVEL 02',
-        shiftType: 'GEOMETRY_SHIFT',
+        title,
+        shiftType: 'TYPE_SHIFT',
         playerStart: base.playerStart,
         door: base.door,
         platforms: base.platforms,
@@ -148,10 +153,83 @@ export function getLevelData(levelNum: number): LevelData {
       };
 
     case 3:
+      // Difficulty 3: Caps Lock / Case Shift (shifts text to lowercase, spikes to harmless bumps)
       return {
         id: 3,
-        title: 'LEVEL 03',
+        title,
+        shiftType: 'CAPS_SHIFT',
+        playerStart: base.playerStart,
+        door: base.door,
+        platforms: base.platforms,
+        spikes: base.spikes,
+      };
+
+    case 4:
+      // Difficulty 4: Control Keycap Swap (controls shift to new keys)
+      return {
+        id: 4,
+        title,
+        shiftType: 'CONTROLS_SHIFT',
+        playerStart: base.playerStart,
+        door: base.door,
+        platforms: base.platforms,
+        spikes: base.spikes,
+      };
+
+    case 5:
+      // Difficulty 5: Geometry Shift (double click or drag platforms/spikes)
+      return {
+        id: 5,
+        title,
+        shiftType: 'GEOMETRY_SHIFT',
+        playerStart: base.playerStart,
+        door: base.door,
+        platforms: base.platforms,
+        spikes: base.spikes,
+      };
+
+    case 6:
+      // Difficulty 6: Clipboard Shift (Ctrl+X cut spikes, Ctrl+C / Ctrl+V paste platform)
+      return {
+        id: 6,
+        title,
+        shiftType: 'CLIPBOARD_SHIFT',
+        playerStart: base.playerStart,
+        door: base.door,
+        platforms: base.platforms,
+        spikes: base.spikes,
+      };
+
+    case 7:
+      // Difficulty 7: Dual Shift (Hold Left Shift + Right Shift simultaneously)
+      return {
+        id: 7,
+        title,
+        shiftType: 'DUAL_SHIFT',
+        playerStart: base.playerStart,
+        door: base.door,
+        platforms: base.platforms,
+        spikes: base.spikes,
+      };
+
+    case 8:
+      // Difficulty 8: Tab Switch (Shift browser tabs)
+      return {
+        id: 8,
+        title,
         shiftType: 'TAB_SHIFT',
+        playerStart: base.playerStart,
+        door: base.door,
+        platforms: base.platforms,
+        spikes: base.spikes,
+      };
+
+    case 9:
+      // Difficulty 9: URL Hash / Query Shift (?door=unlocked or #door=unlocked)
+      return {
+        id: 9,
+        title,
+        shiftType: 'URL_SHIFT',
         playerStart: base.playerStart,
         door: base.door,
         platforms: base.platforms,

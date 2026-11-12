@@ -664,9 +664,15 @@ export const LevelEditor: React.FC<LevelEditorProps> = ({ onBack, onPlayLevel })
               onChange={(e) => setShiftType(e.target.value as ShiftType)}
               className="bg-black border border-[#00FF66]/40 px-2 py-0.5 rounded text-[#00FF66]"
             >
-              <option value="KEY_SHIFT">KEY_SHIFT (Physical Shift Key)</option>
-              <option value="GEOMETRY_SHIFT">GEOMETRY_SHIFT (Click/Double Click Shift)</option>
-              <option value="TAB_SHIFT">TAB_SHIFT (Switch Browser Tab)</option>
+              <option value="KEY_SHIFT">1. KEY_SHIFT (Physical Shift Key)</option>
+              <option value="TYPE_SHIFT">2. TYPE_SHIFT (Type 'shift' on keyboard)</option>
+              <option value="CAPS_SHIFT">3. CAPS_SHIFT (Caps Lock Case Shift)</option>
+              <option value="CONTROLS_SHIFT">4. CONTROLS_SHIFT (Shifted Keycaps)</option>
+              <option value="GEOMETRY_SHIFT">5. GEOMETRY_SHIFT (Click/Double Click Shift)</option>
+              <option value="CLIPBOARD_SHIFT">6. CLIPBOARD_SHIFT (Ctrl+X Cut / Ctrl+V Paste)</option>
+              <option value="DUAL_SHIFT">7. DUAL_SHIFT (Left Shift + Right Shift)</option>
+              <option value="TAB_SHIFT">8. TAB_SHIFT (Switch Browser Tab)</option>
+              <option value="URL_SHIFT">9. URL_SHIFT (URL Hash/Query Shift)</option>
               <option value="CUSTOM">CUSTOM (Describe in note)</option>
             </select>
           </div>

@@ -46,7 +46,17 @@ export interface Player extends Rect {
   respawnTimer: number;
 }
 
-export type ShiftType = 'KEY_SHIFT' | 'GEOMETRY_SHIFT' | 'TAB_SHIFT' | 'CUSTOM';
+export type ShiftType =
+  | 'KEY_SHIFT'
+  | 'TYPE_SHIFT'
+  | 'CAPS_SHIFT'
+  | 'CONTROLS_SHIFT'
+  | 'GEOMETRY_SHIFT'
+  | 'CLIPBOARD_SHIFT'
+  | 'DUAL_SHIFT'
+  | 'TAB_SHIFT'
+  | 'URL_SHIFT'
+  | 'CUSTOM';
 
 export interface LevelData {
   id: number;
