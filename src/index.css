@@ -1,0 +1,34 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'JetBrains Mono', monospace;
+  }
+}
+
+/* CRT Scanline and flicker overlay */
+.crt-overlay {
+  background: linear-gradient(
+    rgba(18, 16, 16, 0) 50%, 
+    rgba(0, 0, 0, 0.25) 50%
+  ), linear-gradient(
+    90deg,
+    rgba(255, 0, 0, 0.03),
+    rgba(0, 255, 0, 0.01),
+    rgba(0, 0, 255, 0.03)
+  );
+  background-size: 100% 3px, 3px 100%;
+  pointer-events: none;
+}
+
+.terminal-glow {
+  text-shadow: 0 0 8px rgba(0, 255, 102, 0.6), 0 0 16px rgba(0, 255, 102, 0.25);
+}
+
+.terminal-box-glow {
+  box-shadow: 0 0 15px rgba(0, 255, 102, 0.2), inset 0 0 15px rgba(0, 255, 102, 0.05);
+}
+
+.terminal-amber-glow {
+  text-shadow: 0 0 8px rgba(255, 176, 0, 0.6), 0 0 16px rgba(255, 176, 0, 0.25);
+}

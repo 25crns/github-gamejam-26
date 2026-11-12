@@ -1,0 +1,6 @@
+{
+  "name": "SHIFT: A Minimalist Puzzle Platformer",
+  "description": "A minimalist 2D puzzle platformer where every level shares the same layout, but 'SHIFT' means something completely different.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
